@@ -1,0 +1,326 @@
+---
+title: "Group A15 Machine Learning Lab 2 block 2"
+author: "Omkar Bhutra(omkbh878), Tejashree R Mastamardi (tejma768), Vinay Bengaluru (vinbe289)"
+date: "11 December 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+always_allow_html: yes    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, echo=FALSE, include=FALSE}
+library(dplyr)
+library(plotly)
+library(ggplot2)
+library(xlsx)
+library(readxl)
+library(tidyr)
+library(lubridate)
+library(stringr)
+library(mgcv)
+library(gridExtra)
+library(akima)
+library(reshape)
+library(pamr)
+library(glmnet)
+library(pROC)
+library(kernlab)
+library(e1071)
+```
+
+##Assignment 1. 
+###Using GAM and GLM to examine the mortality rates
+####Q1
+From the plots we can see that, Mortality and Influenza peaking during the same time of each year which is the 1st quarter (Jan to March) with Influenza peaking sometimes in December of the previous as well. Although, The highest mortality is in January of 1996 with 2597 deaths and the highest laboratory-confirmed cases of influenza is found in December of 1999 Dec with 355 cases. The third plot shows the ratio of influenza cases that directly attributed to death and it confirms that the two variables are highly correlated.
+
+```{r gam1, message=FALSE, warning=FALSE, echo=FALSE}
+Influenza = read.xlsx("Influenza.xlsx",sheetName = "Raw data",header = TRUE)
+Influenza$Date=date_decimal(Influenza$Time)
+Influenza$influenzaratio<-((Influenza$Influenza)/(Influenza$Mortality))
+p1<-ggplot(Influenza,aes(Date,Mortality))+geom_line(color="black")+scale_fill_brewer()+theme_classic()+ggtitle("Time series plot of Mortality")
+p1
+
+p2<-ggplot(Influenza,aes(Date,Influenza))+geom_line(color="black")+scale_fill_brewer()+theme_classic()+ggtitle("Time series plot of lab confirmed influenza cases")
+p2
+
+p3<-ggplot(Influenza,aes(Date,influenzaratio))+geom_line(color="black")+scale_fill_brewer()+theme_classic()+ggtitle("Time series plot of ratio of mortality to influenza")
+p3
+
+```
+
+####Q2
+```{r gam2, message=FALSE, warning=FALSE, echo=FALSE}
+gammer<-mgcv::gam(data=Influenza, Mortality ~ Year + s(Week,k=length(unique(Influenza$Week))), method="GCV.Cp")
+summary(gammer)
+
+Influenza$gampredmortality<-mgcv::predict.gam(gammer,newdata = Influenza,type = "link") 
+
+
+```
+
+Underlying probablistic equation of the model :
+
+$$ Mortality = N(\mu, \sigma^2) $$
+$$ g(\mu) = Intercept + Beta_{year} * Year + s(Week)  $$
+Where g is the link function, in this case it is a normal distribution
+
+
+####Q3
+```{r gam3, message=FALSE, warning=FALSE, echo=FALSE}
+p4<-ggplot(Influenza)+geom_line(aes(x=Date,y=gampredmortality),color="red",size=1)+geom_line(aes(x=Date,y=Mortality),color="black",size=0.5)+scale_fill_brewer()+theme_classic()+ggtitle("Time series plot of Predicted Mortality")
+
+p4
+
+gam.check(gammer,pch=19,cex=.3)
+plot(gammer)
+```
+
+The predicted mortality fits quite well with the time (x axis) i.e the peaks and troughs match with the actual mortality value but it is a repeating function that does not capture the the mortality values in the model and hence not a very good model to predict.
+It is observed that the linear component of year is not significant but the spline component of Week is a significant term with a very low p value.
+From the plot of the spline component it is seen that mortality peaks in the winter of each year and are the least in the summer of each year. 
+
+```{r gam10, message=FALSE, warning=FALSE, echo=FALSE}
+gammer1<-mgcv::gam(data=Influenza, Mortality ~ Year + s(Week,k=length(unique(Influenza$Week))))
+
+s=interp(Influenza$Year, Influenza$Week, fitted(gammer1))
+print(gammer1)
+summary(gammer1)
+gammer1$sp
+#plot_ly(x=~s$x, y=~s$y, z=~s$z, type="surface")
+knitr::include_graphics("surface.png")
+```
+
+
+####Q4
+```{r gam4, message=FALSE, warning=FALSE, echo=FALSE}
+
+modeldev <- NULL
+for(sp in c(0.001, 0.01, 0.005, 2, 5))
+{
+  k=length(unique(Influenza$Week))
+gammod <- mgcv::gam(data = Influenza, Mortality~Year+s(Week, k=k, sp=sp), method = "GCV.Cp")
+temp <- cbind(gammod$deviance, gammod$fitted.values, gammod$y, Influenza$Date,  
+              sp, sum(influence(gammod)))
+modeldev <- rbind(temp, modeldev)
+}
+
+modeldev <- as.data.frame(modeldev)
+colnames(modeldev) <- c("Deviance", "Mortalitypred", "Mortality", "Date", 
+                              "penaltyfactor", "dof")
+
+modeldev$Date <- as.Date(modeldev$Date, origin = '1995-01-01')
+#deviance plot
+p5 <- ggplot(data=modeldev, aes(x = penaltyfactor, y = Deviance)) +geom_line() +theme_dark() +
+ggtitle("Plot of Deviances of models vs. Penalty Factors")
+p5
+#degree of freedom plot
+p6 <- ggplot(data=modeldev, aes(x = penaltyfactor, y = dof)) +geom_line() +theme_dark() +
+ggtitle("Plot of Degree of freedoms of models vs. Penalty Factors")
+p6
+
+modeldevwide <- melt(modeldev[,c("Date", "penaltyfactor", 
+                                              "Mortality", "Mortalitypred")], 
+                            id.vars = c("Date", "penaltyfactor"))
+
+#predicted vs observed mortality
+p7 <- ggplot(data=modeldevwide[modeldevwide$penaltyfactor == 0.001,], aes(x= Date, y = value)) + 
+  geom_line(aes(color = variable), size=1) +scale_fill_brewer() +theme_dark() +ggtitle("Plot of Mortality vs. Time(Penalty factor of 0.001 is used)")
+
+p8 <- ggplot(data=modeldevwide[modeldevwide$penaltyfactor == 5,], aes(x= Date, y = value)) + geom_line(aes(color = variable), size=1) +scale_fill_brewer() +theme_dark() +ggtitle("Plot of Mortality vs. Time (Penalty factor of 5 is used)")
+
+grid.arrange(p7,p8,ncol=1)
+```
+
+A directly propotional relationship is seen between penalty factor and deviance. Higher the penalty factor , higher is the deviance. With a higher penalty factor comes less complexity and more bias in the model.
+An inverse relationship is seen between penalty factor and degree's of freedom. Lower the penalty factor, Higher is the degree of freedom. yes, this is confirmed from our results.
+
+####Q5
+```{r gam5, message=FALSE, warning=FALSE, echo=FALSE}
+
+Influenza$rez<-gammer$residuals
+p9<-ggplot(Influenza,aes(x=Date))+geom_line(aes(y=rez,color="Residuals"))+geom_line(aes(y=Influenza,color="Influenza"),size=1.5)+scale_fill_brewer()+ggtitle("Time series plot of Residuals of model and Influenza cases")
+p9
+```
+
+the temporal pattern in the residuals can be linked to the periodic outbreak of influenza to an extent. The Three largest outbreaks of influenza also have residuals peaking in the positive direction while it is seen that the residuals have negative troughs right before the influenza peaks that is for the last quarter of the year.
+
+####Q6
+```{r gam6, message=FALSE, warning=FALSE, echo=FALSE}
+
+lastgammod <- mgcv::gam(data = Influenza, Mortality~s(Year,k=length(unique(Influenza$Year)))+s(Week, k=length(unique(Influenza$Week)))+Influenza, method = "GCV.Cp")
+
+Influenza$lastgammodpred<-mgcv::predict.gam(lastgammod,newdata = Influenza,type = "link") 
+
+p10<-ggplot(Influenza,aes(x=Date))+geom_line(aes(y=lastgammodpred,color="PredictedMortality"),size=1.5)+geom_line(aes(y=Mortality,color="Mortality"))+scale_color_manual(values=c("blue","red"))+ggtitle("Time series plot of Predicted and Actual Mortality based on new GAM model")+labs(color="Legend")
+p10
+
+```
+
+Yes, this Generalised Additive Model is better than the previous models as the predicted fit is good not only in the x axis but also matches the actual value peaks and troughs. It can be concluded that Mortality can be described well with non linear spline functions of Year and Week along with the linear function of Influenza. Hence, Outbreaks of Influenza in the winters have a direct effect on Mortality.
+
+##Assignment 2. 
+###High-dimensional methods
+####Q1
+
+```{r nsn1, message=FALSE, warning=FALSE, echo=FALSE,error=FALSE}
+data<-read.csv2("data.csv",header = TRUE,sep=";")
+email<-as.data.frame(data)
+email$Conference<-as.factor(email$Conference)
+rownames(email)=1:nrow(email)
+
+n=dim(email)[1]
+set.seed(12345)
+id=sample(1:n, floor(n*0.7))
+train=email[id,]
+test=email[-id,]
+xtrain=t(train[,-4703])
+ytrain=train[[4703]]
+xtest=t(test[,-4703])
+ytest=test[[4703]]
+myemailtrain=list(x=xtrain,y=ytrain,geneid=as.character(1:nrow(xtrain)),genenames=rownames(xtrain))
+myemailtest=list(x=xtest,y=ytest,geneid=as.character(1:nrow(xtest)),genenames=rownames(xtest))
+model=pamr.train(myemailtrain,threshold = seq(0,4,0.1))
+
+cvmodel=pamr.cv(model,myemailtrain)
+print(cvmodel)
+
+pamr.plotcv(cvmodel)
+
+pamr.plotcen(model,myemailtrain,threshold=1.4)
+
+a=pamr.listgenes(model,myemailtrain,threshold=1.4)
+cat(paste(colnames(myemailtrain)[as.numeric(a[,1])],collapse = '\n'))
+
+predicted <- pamr.predict(model, newx = xtest, threshold = 1.4)
+
+contab <- table(ytest, predicted)
+contab
+names(dimnames(contab)) <- c("Test Actual", "Predicted by Nearest Shrunken Centroid on test")
+contabres<-caret::confusionMatrix(contab)
+mse1<-(1-(sum(diag(contab))/sum(contab)))
+paste("The misclassificaiton rate is",mse1)
+      
+var<- as.data.frame(pamr.listgenes(model, myemailtrain, threshold = 1.4))
+knitr::kable(colnames(data[,head(var$id,10)]), caption = "Top 10 Important features by NSC ")
+```
+
+From the plot generated of threshold vs misclassification error. It is observed that when the threshold value is 1.4, the misclassification error is at its lowest. 170 features were selected by this model and top 10 features are listed below. The misclassification error rate is 10%. The confusion matrix reveals that 'everything else' is classified with 10/10 times while 'announces of conferences' is classified 8/10 times.
+
+####Q2a
+```{r enm, message=FALSE, warning=FALSE, echo=FALSE,error=FALSE}
+
+xtrain2<-as.matrix(train[,-4703])
+ytrain2<-as.matrix(train[,4703])
+xtest2<-as.matrix(test[,-4703])
+ytest2<-as.matrix(test[,4703])
+
+cvmodel2<-cv.glmnet(x=xtrain2,y=ytrain2,alpha = 0.5,family="binomial")
+model2<-glmnet(x=xtrain2,y=ytrain2,alpha = 0.5,family="binomial")
+elasticpredict<-predict.cv.glmnet(cvmodel2, newx = xtest2, s = "lambda.min", type = "class")
+elasticpredict2<-predict(model2, xtest2, type = "response")
+contab22 <- table(ytest2, elasticpredict)
+plot(cvmodel2)
+plot(model2)
+contab2 <- table(ytest2, elasticpredict)
+contab2
+contab2res<-caret::confusionMatrix(contab2)
+mse2<-(1-(sum(diag(contab2))/sum(contab2)))
+paste("The misclassificaiton rate is",mse2)
+names(dimnames(contab2)) <- c("Actual Test", "Predicted by ElasticNet model")
+
+elasticcoefs<- coef(cvmodel2, s = "lambda.min")
+elasticvars <- list(name = elasticcoefs@Dimnames[[1]][elasticcoefs@i + 1])
+knitr::kable(elasticvars, caption = "Contributing features of elastic net model")
+```
+
+The Elastic net model has a misclassification error rate of 10%. This model selects the least number of features i.e 39 features.
+
+
+####Q2b
+```{r svm, message=FALSE, warning=FALSE, echo=FALSE,error=FALSE}
+set.seed(12345)
+svmmodel<- ksvm(xtrain2, ytrain2, kernel="vanilladot",scaled=FALSE)
+svmpredict<- predict(svmmodel, xtest2, type="response")
+
+consvm<- table(ytest2, svmpredict)
+names(dimnames(consvm)) <- c("Actual Test", "Predicted svm")
+consvmres<-caret::confusionMatrix(consvm)
+consvm
+mse3<-(1-(sum(diag(consvm))/sum(consvm)))
+paste("The misclassificaiton rate is",mse3)
+comptab<- as.data.frame(cbind(contabres$overall[[1]]*100, 
+                      contab2res$overall[[1]]*100, 
+                      consvmres$overall[[1]] *100))
+countf <- cbind(nrow(var), length(elasticcoefs@i), length(svmmodel@coef[[1]]))
+mse <- c(mse1,mse2,mse3)
+comptab <- rbind(comptab, countf)
+comptab <- rbind(comptab, mse)
+colnames(comptab) <- c("Nearest Shrunken Centroid Model", 
+                            "ElasticNet Model", "SVM Model")
+rownames(comptab) <- c("Accuracy", "Number of Features","Misclassifcation error rate")
+knitr::kable(comptab, caption = "Comparsion of the models")
+
+```
+
+The SVM model can be chosen as the misclassification error rate is the least when tested on unknown data and the number of features are also close to the minimum of the three models i.e 43 features selected.
+
+####Q3
+```{r bhm, message=FALSE, warning=FALSE, echo=FALSE,error=FALSE}
+set.seed(12345)
+p<-c()
+x<-email[,-4703]
+for (i in 1:(length(email)-1)){
+  x<-email[,i]
+res<-t.test(x~Conference,data=email,alternative="two.sided")
+p[i]<-res$p.value
+}
+
+pvalues<- data.frame(pvalue=p,variable=1:(length(email)-1))
+pvalues<- pvalues[order(pvalues$pvalue),]
+
+
+alpha<-0.05
+l<-c()
+o<-1
+for(j in 1:length(p)){
+ if( pvalues$pvalue[j]< alpha*(j/nrow(pvalues)) ){
+   l[o]<-j
+   o<-o+1
+ }
+}
+pl = pvalues$pvalue[max(l)]
+pl
+for(j in 1:nrow(pvalues)){
+  if(pvalues$pvalue[j]<= pl){
+    pvalues$status[j]<-FALSE
+  }
+  else{
+    pvalues$status[j]<-TRUE
+  }
+}
+
+significantp<-filter(pvalues,pvalue<=0.05)
+significantp<-cbind(significantp,Variable_name=colnames(email[significantp$variable]))
+significantp
+
+finalbh<-filter(pvalues,status==FALSE)
+finalbh<-cbind(finalbh,Variable_name=colnames(email[finalbh$variable]))
+finalbh
+
+
+```
+
+39 features correspond to the rejecting the null hypothesis, according to the BH rejection threshold. These contain variable names such as 'notification','workshop','conference','candidates','published','topics' to name a few of the 39 features. These reject that the null hypothesis that states that these features have no effect in the classification of into conference and non-conference.
+
+From the first table , it is observed that 281 features have significant p values. Features such as 'committee',
+'conference','process','optimization','arrangements' make sense in the usage.
+
+
+### Apendix
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```

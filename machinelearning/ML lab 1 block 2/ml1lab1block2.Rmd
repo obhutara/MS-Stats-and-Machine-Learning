@@ -1,0 +1,246 @@
+---
+title: "Lab1Block2"
+author: "Omkar Bhutra"
+date: "4th December 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r pack, echo=FALSE, include=FALSE}
+library(mboost)
+library(randomForest)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(knitr)
+library(manipulate)
+library(gridExtra)
+```
+
+##Question 1
+```{r spambase, warning=FALSE, error=FALSE, message=FALSE,echo=FALSE}  
+spambase <- read.csv2("spambase.csv", header = TRUE, sep = ";", quote = "\"",
+dec = ",", fill = TRUE)
+spambase$Spam<-as.factor(spambase$Spam)
+
+n=dim(spambase)[1]
+set.seed(12345)
+id=sample(1:n, floor(n*2/3))
+train=spambase[id,]
+test=spambase[-id,]
+
+numbertree <- seq(from = 10,to = 100, by = 10)
+
+adaboost <- function(notree) 
+{
+spambase.gb <- blackboost(Spam ~., data = train,control = boost_control(mstop = notree),family = AdaExp())
+
+predicty <- predict(spambase.gb, newdata = train, type= "class")
+confusionmatrix <- table(predicty,train$Spam)
+errortrain <- 1-sum(diag(confusionmatrix))/sum(confusionmatrix)
+
+
+predicty <- predict(spambase.gb, newdata = test, type= "class")
+confusionmatrix <- table(predicty,test$Spam)
+errortest <- 1-sum(diag(confusionmatrix))/sum(confusionmatrix)
+
+return(list(errortrain= errortrain, errortest=errortest))
+}
+
+errorrates <- as.data.frame(t(sapply(numbertree, adaboost)))
+trainingerror <- as.vector(unlist(errorrates$errortrain))
+testerror <- as.vector(unlist(errorrates$errortest))
+
+
+training = sample(1:n,floor(n*2/3))
+random_forest <- function(notree)
+{
+spambase.rf <- randomForest(Spam ~ ., data=spambase, subset = training, importance=TRUE,ntree = notree)
+
+ypredict <- predict(spambase.rf, newdata = train, type= "class")
+confusionmatrix <- table(ypredict,train$Spam)
+error_train <- 1-sum(diag(confusionmatrix))/sum(confusionmatrix)
+
+ypredict <- predict(spambase.rf, newdata=test,btype ="class")
+confusionmatrix <- table(ypredict,test$Spam)
+error_test <- 1-sum(diag(confusionmatrix))/sum(confusionmatrix)
+return(list(error_train = error_train,error_test = error_test))
+}
+
+errorrates_random <- as.data.frame(t(sapply(numbertree, random_forest)))
+trainingerror_rf <- as.vector(unlist(errorrates_random$error_train))
+testerror_rf <- as.vector(unlist(errorrates_random$error_test))
+
+df <- data.frame(adaboost = trainingerror, random_forest = trainingerror_rf, numberoftrees = numbertree)
+
+p1 <- ggplot(data=df, aes(x=numbertree, y = adaboost)) + geom_line(colour="blue")+geom_point()+
+ggtitle("Adaboost Vs Random Forest","Training Misclassification")
+
+p2 <- ggplot(data=df, aes(x=numbertree, y = random_forest)) +geom_line(colour="red")+geom_point()
+
+grid.arrange(p1,p2,ncol=1,nrow=2)
+
+
+df1 <- data.frame(adaboost = testerror, random_forest = testerror_rf,nooftrees = numbertree)
+
+p3 <- ggplot(df1, aes(x=numbertree, y = adaboost)) +geom_line(colour="blue")+geom_point()+
+ggtitle("Adaboost Vs Random Forest", "Test Misclassification")
+
+p4 <- ggplot(df1, aes(x=numbertree, y = random_forest)) +geom_line(colour="red")+geom_point()
+
+grid.arrange(p3,p4,ncol=1,nrow=2)  
+
+
+ggplot(df1, aes(numbertree)) + 
+  geom_line(aes(y = adaboost, colour = "adaboost")) + 
+  geom_line(aes(y = random_forest, colour = "random forest"))+ labs(x="Number of tree's",y="Misclassification rates")
+ggtitle("Performance evaluation of Adaboost Vs Random Forest","Testing Misclassification rates")
+
+```
+
+Two ensemble methods, Adaboost classification and Random Forest are implemented on the same data. Both methods converge weak regressions to form a committee regression (a combined strong regression). Adaboost changes the observations weight each time it is misclassified so that it can converge the solution based on recomputed weights. Random Forest combines many iterations to converge a solution which may not fit the data well but in this case is more accurate.
+
+In the training data, it is observed that adaboost's misclassification rate decreases exponentially upto 65 tree's and then it slowly decreases to 0.07 upto 100 trees. The misclassification rate for random forest is choppy but generally decreases. It is seen that a model with 60 trees and 100 trees will have similar misclassification rates.
+In the testing data, Adaboost model with 50 trees has a low misclassification rate and can be used over a higher tree model to avoid complexity. The Random Forest model with 60 tree's has the lowest misclassification rate.
+
+It is seen from the plots that random forest method produces lower misclassification rates and hence it can be said that it performs better than adaboost. thus, a Random forest model with 60 tree's is optimal.
+
+## Question 2
+```{r mixture, warning=FALSE, error=FALSE, message=FALSE,echo=FALSE} 
+mixture_model <- function(newk)
+{
+set.seed(1234567890)
+max_it <- 100 # max number of EM iterations
+min_change <- 0.1 # min change in log likelihood between two consecutive EM iterations
+N=1000 # number of training points
+D=10 # number of dimensions
+x <- matrix(nrow=N, ncol=D) # training data
+true_pi <- vector(length = 3) # true mixing coefficients
+true_mu <- matrix(nrow=3, ncol=D) # true conditional distributions
+true_pi=c(1/3, 1/3, 1/3)
+true_mu[1,]=c(0.5,0.6,0.4,0.7,0.3,0.8,0.2,0.9,0.1,1)
+true_mu[2,]=c(0.5,0.4,0.6,0.3,0.7,0.2,0.8,0.1,0.9,0)
+true_mu[3,]=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5)
+plot(true_mu[1,], type="o", col="blue", ylim=c(0,1))
+points(true_mu[2,], type="o", col="red")
+points(true_mu[3,], type="o", col="green")
+# Producing the training data
+for(n in 1:N) {
+k <- sample(1:3,1,prob=true_pi)
+for(d in 1:D) {
+x[n,d] <- rbinom(1,1,true_mu[k,d])
+}}
+K=newk # number of guessed components
+z <- matrix(nrow=N, ncol=K) # fractional component assignments
+pi <- vector(length = K) # mixing coefficients
+mu <- matrix(nrow=K, ncol=D) # conditional distributions
+llik <- vector(length = max_it) # log likelihood of the EM iterations
+# Random initialization of the paramters
+pi <- runif(K,0.49,0.51)
+pi <- pi / sum(pi)
+for(m in 1:newk) {
+mu[m,] <- runif(D,0.49,0.51)
+}
+pi
+mu
+for(it in 1:max_it)
+{
+Sys.sleep(0.5)
+# E-step: Computation of the fractional component assignment
+# Distributions
+for (o in 1:N)
+{
+p=0
+for (l in 1:K)
+{
+p=p+prod( ((mu[l,]^x[o,])*((1-mu[l,])^(1-x[o,]))) )*pi[l] #
+}
+for (l in 1:K)
+{
+z[o,l]=pi[l]*prod( ((mu[l,]^x[o,])*((1-mu[l,])^(1-x[o,]))) ) / p
+}
+}
+#Log likelihood
+ll <-matrix(0,nrow =1000,ncol = K)
+llik[it] <-0
+for(o in 1:N)
+{
+for (l in 1:K)
+{
+ll[o,l] <- pi[l]*prod( ((mu[l,]^x[o,])*((1-mu[l,])^(1-x[o,]))))
+}
+llik[it]<- sum(log(rowSums(ll)))
+}
+cat("iteration: ", it, "log likelihood: ", llik[it], "\n")
+flush.console()
+# Stop if the log likelihood has not changed significantly
+if (it > 1)
+{
+if (llik[it]-llik[it-1] < min_change)
+{
+if(K == 2)
+{
+plot(mu[1,], type="o", col="blue", ylim=c(0,1))
+points(mu[2,], type="o", col="red")
+}
+else if(K==3)
+{
+plot(mu[1,], type="o", col="blue", ylim=c(0,1))
+points(mu[2,], type="o", col="red")
+points(mu[3,], type="o", col="green")
+}
+else
+{
+plot(mu[1,], type="o", col="blue", ylim=c(0,1))
+points(mu[2,], type="o", col="red")
+points(mu[3,], type="o", col="green")
+points(mu[4,], type="o", col="yellow")
+}
+break
+}
+}
+#M-step: ML parameter estimation from the data and fractional component assignments
+mu<- (t(z) %*% x) /colSums(z)
+# N - Total no. of observations
+pi <- colSums(z)/N
+}
+cat("value of updated pi is " , pi )
+cat("\n")
+sprintf("value of updated mu is")
+print(mu)
+plot(llik[1:it], type="o")
+}
+mixture_model(2)
+mixture_model(3)
+mixture_model(4)
+```
+
+For k=2 ( Two bernoulli distribution componenets)
+It is observed that two Bernoulli components with equal probabilities for each class has not affected the classification much. This is due to equivalant probabilities cancel out each other effects.
+The likelihood maximization is completed within 12 iterations. It also shows how in the log likelihood, starting out at ???6950 , goes exponential beyond the 4th iteration and increases upto 8th iteration and stablises around ???6350.
+It is observed that the final $\hat{\mu}_{\cdot, 2}$ values are following the same trend as the true $\mu_1$ and $\mu_2$. Component $\mu_3$ is distributed equally between $\hat{\mu}_{1,2}$ and $\hat{\mu}_{2,2}$ since it does not have distinct features: they are all equally likely, resulting in the maximum variance possible for a Bernoulli distribution $\left(\; Var(x) = \mu \cdot (1-\mu) = 0.5 \cdot 0.5 =  0.25 \;\right)$.
+
+For k=3 ( Three bernoulli distribution componenets)
+When $K=3$, $\hat{\pi}_{\cdot, 3}$ values fluctuate around $0.33$. The log-likelihood follows the same trend as the previous iteration. Increasing exponentially, after the 8th iteration. In the final $\hat{\mu}_{\cdot, 3}$ values plot, the result resamble closely the hidden phenomena behind the data..
+
+When $K=4$, if we examine final $\hat{\mu}_{\cdot, 4}$ plot, we can see the pairs {$\hat{\mu}_{1,4}$, $\hat{\mu}_{2,4}$}, and {$\hat{\mu}_{3,4}$, $\hat{\mu}_{4,4}$} following the same trends. However it is still clear to see $\hat{\mu}_{1,4}$ and $\hat{\mu}_{2,4}$ behave as $\mu_1$ and $\mu_2$ in the real latent parameters. $\hat{\mu}_{3,4}$ and $\hat{\mu}_{4,4}$ have lowest probability in $\hat\pi_k$ plot.
+
+In conclusion we can say that, if we increase the number of components, with the increase in complexity, some redundant components with similar behaviours can be found, as in the case of $K=4$. Without the true distributions, it is difficult choice between $K=2$ and $K=3$: the extra component may or may not bepresent in the real data. It would be necessary to run further analysis.
+
+For k=4 ( Four bernoulli distribution componenets)
+The two curves are very noisy and they do not resemble the true curves,taking the average would
+approximate the multivariate Bernoulli distribution with uniform parameters well. So the EM algorithm
+has modelled two distributions based on the noise from the uniform one due to the prescence of only three true distributions.
+For too few parameters i.e for K=2, the log-likelihood function runs for fewer iterations giving $\mu$ near to the
+true values of $\mu$ while for too many parameters the convergence iterations increases. For K=3, the log-likelihood
+value converges in optimal iterations, that is expected to provide correct. For K=4 the convergence steps increases and the updated pi values for pi1 and pi differs greatly from the true value.
+
+# Appendix
+```{r, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
